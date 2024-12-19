@@ -316,7 +316,7 @@ else:
         selected_months = st.multiselect(
             "Select Months to Compare:",
             options=months_available,
-            default=months_available[-1:-3:-1]  # Default to first two months for comparison
+            default=months_available[1:4]  # Default to first two months for comparison
         )
 
         if selected_months:
