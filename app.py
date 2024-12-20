@@ -16,7 +16,7 @@ def load_data(file_path, sheet_name):
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
-app_mode = st.sidebar.radio("Choose an option", ["Month-wise Summary","Month-wise Analytics", "Compare All Months"])
+app_mode = st.sidebar.radio("Choose an option", ["Month-wise Summary","Resource-wise Analytics", "Compare All Months"])
 
 if app_mode == "Month-wise Summary":
     selected_month = st.selectbox(
@@ -138,57 +138,42 @@ if app_mode == "Month-wise Summary":
         else:
             st.write(f"No completed tasks for {assignee}.")
 
-# Month-wise Analytics Section
-elif app_mode == "Month-wise Analytics":
-    selected_month = st.selectbox(
-        "Select Month:",
-        options=calendar.month_name[1:],
-        index=4  # Default to 'May'
-    )
+# Resource-wise Analytics Section
+elif app_mode == "Resource-wise Analytics":
+    # Load data from all available months first
+    current_directory = os.path.dirname(os.path.abspath(__file__))
+    files = [f for f in os.listdir(current_directory) if f.endswith(".xlsx")]
+    months_available = [os.path.splitext(f)[0] for f in files]
 
-    # Define file path based on selected month
-    file_path = f'{selected_month}.xlsx'
+    # Initialize empty DataFrames to store combined data
+    all_sprint_data = pd.DataFrame()
+    all_loop_data = pd.DataFrame()
 
-    sheet_name_loop = 'Loop Tasks'
-    sheet_name_sprint = 'Sprint Tasks'
+    # Load and combine data from all months
+    for month in months_available:
+        file_path = f'{month}.xlsx'
+        
+        # Load data from both sheets
+        df_sprint = load_data(file_path, 'Sprint Tasks')
+        df_loop = load_data(file_path, 'Loop Tasks')
+        
+        if not df_sprint.empty:
+            df_sprint['Month'] = month
+            df_sprint.columns = df_sprint.columns.str.strip()
+            df_sprint['Assignee'] = df_sprint['Assignee'].apply(lambda x: x.split()[0] if isinstance(x, str) else None)
+            df_sprint = df_sprint.rename(columns={'Assignee': 'Resource Name', 'Created': 'Date', "Summary": "Tasks List"})
+            df_sprint['Tasks Type'] = "Sprint"
+            all_sprint_data = pd.concat([all_sprint_data, df_sprint], ignore_index=True)
+            
+        if not df_loop.empty:
+            df_loop['Month'] = month
+            df_loop.columns = df_loop.columns.str.strip()
+            df_loop['Tasks Type'] = "Loop"
+            all_loop_data = pd.concat([all_loop_data, df_loop], ignore_index=True)
 
-    # Load data from sheets
-    df_sprint = load_data(file_path, sheet_name_sprint)
-    df_loop = load_data(file_path, sheet_name_loop)
+    # Combine all data
+    df = pd.concat([all_loop_data, all_sprint_data], ignore_index=True)
 
-    # Ensure there are no leading or trailing spaces in column names
-    if not df_loop.empty:
-        df_loop.columns = df_loop.columns.str.strip()
-    if not df_sprint.empty:
-        df_sprint.columns = df_sprint.columns.str.strip()
-
-    # Filter completed tasks
-    if not df_sprint.empty:
-        done_tasks_sprint = df_sprint[df_sprint['Status'] == 'Done']
-
-    # Extract first word function
-    def extract_first_word(text):
-        return text.split()[0] if isinstance(text, str) else None
-
-    # Apply the function to each row in the 'Assignee' column
-    if not df_sprint.empty:
-        df_sprint['Assignee'] = df_sprint['Assignee'].apply(extract_first_word)
-
-    # Rename columns
-    new_column_names = {'Assignee': 'Resource Name', 'Created': 'Date', "Summary": "Tasks List"}
-    if not df_sprint.empty:
-        df_sprint = df_sprint.rename(columns=new_column_names)
-
-    # Add a column to denote task type
-    if not df_loop.empty:
-        df_loop['Tasks Type'] = "Loop"
-    if not df_sprint.empty:
-        df_sprint['Tasks Type'] = "Sprint"
-
-    # Concatenate the DataFrames
-    df = pd.concat([df_loop, df_sprint], ignore_index=True)
-
-    # Proceed with the rest of the processing only if df is not empty
     if not df.empty:
         df['Resource Name'] = df['Resource Name'].str.strip()
         replace_dict = {
@@ -215,81 +200,100 @@ elif app_mode == "Month-wise Analytics":
         }
         df['Resource Name'] = df['Resource Name'].replace(replace_dict)
 
-        # Sidebar dropdown for selecting resources
+        # Convert Date column to datetime
+        df['Date'] = pd.to_datetime(df['Date'])
+
+        # First select person
         selected_person = st.selectbox(
             'Select a person:',
             options=['All'] + list(df['Resource Name'].unique()),
-            index=0  # Default to 'All'
+            index=0
         )
 
-        # Filter DataFrame based on selected person
+        # Then select months to analyze
+        selected_months = st.multiselect(
+            "Select Months to Analyze:",
+            options=months_available,
+            default=months_available
+        )
+
+        # Filter data based on selections
+        filtered_df = df.copy()
         if selected_person != 'All':
-            df = df[df['Resource Name'] == selected_person]
+            filtered_df = filtered_df[filtered_df['Resource Name'] == selected_person]
+        if selected_months:
+            filtered_df = filtered_df[filtered_df['Month'].isin(selected_months)]
 
-        # Task Status Distribution for Each Resource
-        fig_resource_status = px.bar(
-            df.groupby(['Resource Name', 'Status']).size().unstack(fill_value=0),
+        # Task Status Distribution by Month
+        fig_status_by_month = px.bar(
+            filtered_df.groupby(['Month', 'Status']).size().unstack(fill_value=0),
             barmode='stack',
-            title="Task Status Distribution for Each Resource"
+            title=f"Task Status Distribution by Month for {selected_person}"
         )
-        st.plotly_chart(fig_resource_status)
+        st.plotly_chart(fig_status_by_month)
 
-        # Task Type distribution for the selected person
+        # Task Type distribution by Month
         fig_task_type = px.histogram(
-            df, x='Tasks Type', title=f'Task Type Distribution for {selected_person}')
+            filtered_df, 
+            x='Month', 
+            color='Tasks Type',
+            title=f'Task Type Distribution by Month for {selected_person}'
+        )
         st.plotly_chart(fig_task_type)
 
-        # Resource Task Load Over Time
+            # In the Resource-wise Analytics section, update the Task Load Over Time visualization:
+
+            # Task Load Over Time
+        filtered_df['Date'] = pd.to_datetime(filtered_df['Date'])  # Ensure Date is datetime
+        tasks_over_time = filtered_df.groupby([
+            filtered_df['Date'].dt.strftime('%Y-%m-%d'),  # Convert to string format
+            'Month'
+        ]).size().reset_index(name='Task Count')
+        tasks_over_time['Date'] = pd.to_datetime(tasks_over_time['Date'])  # Convert back to datetime
+
         fig_tasks_over_time = px.line(
-            df.groupby(['Date', 'Resource Name']).size().reset_index(name='Task Count'),
-            x='Date', y='Task Count', color='Resource Name',
-            title='Resource Task Load Over Time'
+            tasks_over_time,
+            x='Date', 
+            y='Task Count',
+            color='Month',
+            title=f'Task Load Over Time for {selected_person}'
         )
         st.plotly_chart(fig_tasks_over_time)
 
-        # Heatmap of Task Completions by Date
-        completion_counts = df[df['Status'] == 'Done'].groupby('Date').size().reset_index(name='Completions')
+        # Monthly Task Completion Heatmap - Update this section as well
+        completion_counts = filtered_df[filtered_df['Status'] == 'Done'].groupby([
+            'Month',
+            filtered_df['Date'].dt.strftime('%Y-%m-%d')  # Convert to string format
+        ]).size().reset_index(name='Completions')
         completion_counts['Date'] = pd.to_datetime(completion_counts['Date'])
-        completion_matrix = completion_counts.pivot_table(
-            index=completion_counts['Date'].dt.month,
-            columns=completion_counts['Date'].dt.day,
-            values='Completions', aggfunc='sum'
-        )
-        fig_heatmap = px.imshow(
-            completion_matrix,
-            labels=dict(x="Day of the Month", y="Month", color="Task Completions"),
-            title="Heatmap of Task Completions by Date"
+        completion_counts['Day'] = completion_counts['Date'].dt.day
+
+        fig_heatmap = px.density_heatmap(
+            completion_counts,
+            x='Month',
+            y='Day',
+            z='Completions',
+            title=f"Task Completion Heatmap for {selected_person}"
         )
         st.plotly_chart(fig_heatmap)
 
-        # Task Assignment and Completion Status
-        fig_task_assignment = px.bar(
-            df.groupby(['Resource Name', 'Status']).size().unstack(fill_value=0),
-            barmode='stack',
-            title="Task Assignment and Completion Status"
-        )
-        st.plotly_chart(fig_task_assignment)
-
-        # Details of Uncompleted Tasks
-        uncompleted_tasks = df[df['Status'] != 'Done']
-
-        grouped_incomplete_tasks = uncompleted_tasks.groupby('Resource Name')['Tasks List'].apply(lambda x: ', '.join(x)).reset_index()
-
-        # Split concatenated tasks into individual tasks and convert to set to get unique tasks for each resource
+        # Uncompleted Tasks by Month
+        uncompleted_tasks = filtered_df[filtered_df['Status'] != 'Done']
+        grouped_incomplete_tasks = uncompleted_tasks.groupby(['Month', 'Resource Name'])['Tasks List'].apply(lambda x: ', '.join(x)).reset_index()
         grouped_incomplete_tasks['Unique Incomplete Tasks'] = grouped_incomplete_tasks['Tasks List'].apply(lambda x: set(task.strip() for task in x.split(',')))
-
         grouped_incomplete_tasks.drop(columns=['Tasks List'], inplace=True)
+        st.write("### Uncompleted Tasks by Month", grouped_incomplete_tasks)
 
-        st.write("### Uncompleted Tasks", grouped_incomplete_tasks)
-
-        # Completed Tasks Over Time for Each Resource
-        fig_completion_by_resources = px.scatter(df, x='Tasks List', y='Resource Name',
-                                                color='Resource Name',
-                                                hover_data=['Tasks List', 'Resource Name', 'Date'],
-                                                title='Task Completion by Resources')
-        st.plotly_chart(fig_completion_by_resources)
-
-
+        # Task Timeline
+        fig_timeline = px.scatter(
+            filtered_df, 
+            x='Date', 
+            y='Month',
+            color='Status',
+            hover_data=['Tasks List', 'Status'],
+            title=f'Task Timeline for {selected_person}'
+        )
+        st.plotly_chart(fig_timeline)
 
 
 else:
