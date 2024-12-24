@@ -296,16 +296,7 @@ elif app_mode == "Resource-wise Analytics":
         grouped_incomplete_tasks.drop(columns=['Tasks List'], inplace=True)
         st.write("### Uncompleted Tasks by Month", grouped_incomplete_tasks)
 
-        # Task Timeline
-        fig_timeline = px.scatter(
-            filtered_df, 
-            x='Date', 
-            y='Month',
-            color='Status',
-            hover_data=['Tasks List', 'Status'],
-            title=f'Task Timeline for {selected_person}'
-        )
-        st.plotly_chart(fig_timeline)
+        
 
 
 else:
